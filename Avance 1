@@ -1,0 +1,109 @@
+.INCLUDE "M328PDEF.INC"  ; Incluir la librería con nombres
+
+.CSEG
+.ORG 0x0000          ; Dirección de inicio del programa
+RJMP EmpezarCodigo
+
+; Interrupción del Timer0
+.ORG 0x0020
+RETI
+
+; Interrupción por cambio de estado en botones (Pin-Change Interrupt)
+.ORG 0x0030
+RETI
+
+EmpezarCodigo:
+    ; Configuración del Stack Pointer
+    LDI R16, LOW(RAMEND)
+    OUT SPL, R16
+    LDI R17, HIGH(RAMEND)
+    OUT SPH, R17
+
+Setup:
+    ; Configurar reloj y prescaler
+    LDI R16, 0b10000000  ; Activar el prescaler
+    STS CLKPR, R16
+    LDI R16, 0b00000001  ; 8MHz
+    STS CLKPR, R16
+
+    LDI R16, 0x00        ; Desactivar LED de TX/RX
+    STS UCSR0B, R16
+
+    ; Configurar Timer0
+    LDI R16, 0b00000001
+    STS TIMSK0, R16
+
+    CLR R16
+    LDI R16, (1 << CS02) | (1 << CS00)  ; Prescaler a 1024
+    OUT TCCR0B, R16
+
+    LDI R16, 178
+    OUT TCNT0, R16
+
+    ; Configuración de puertos para los displays
+    ; Transistores en PORTB
+    LDI R16, 0b00001111
+    OUT DDRB, R16
+
+    ; Configurar PORTD como salida para los displays
+    LDI R16, 0b11111111
+    OUT DDRD, R16
+
+Loop:
+    ; Display 1
+    LDI R16, 0x01       ; Activar transistor del display 1 (PB0)
+    OUT PORTB, R16
+    RCALL PonerTabla    ; Cargar la dirección base de la tabla
+    ADIW R30, 1         ; Desplazar Z para acceder a Tabla
+    LPM R16, Z          ; Cargar patrón en R16
+    OUT PORTD, R16
+    RCALL Delay
+
+    ; Display 2
+    LDI R16, 0x02       ; Activa transistor del display 2 
+    OUT PORTB, R16
+    RCALL PonerTabla
+    ADIW R30, 2         
+    LPM R16, Z
+    OUT PORTD, R16
+    RCALL Delay
+
+    ; Display 3
+    LDI R16, 0x04        ; Activa transistor del display 4 
+    OUT PORTB, R16
+    RCALL PonerTabla
+    ADIW R30, 3         
+    LPM R16, Z
+    OUT PORTD, R16
+    RCALL Delay
+
+    ; Display 4
+    LDI R16, 0x08       ; Activa transistor del display 4 
+    OUT PORTB, R16
+    RCALL PonerTabla
+    ADIW R30, 4        
+    LPM R16, Z
+    OUT PORTD, R16
+    RCALL Delay
+
+    RJMP Loop
+
+Delay:
+    LDI R20, 255
+    LDI R21, 50
+DelayLoop:
+    DEC R20
+    BRNE DelayLoop
+    LDI R20, 255
+    DEC R21
+    BRNE DelayLoop
+    RET
+
+PonerTabla:
+    LDI ZL, LOW (Tabla << 1)
+	LDI ZH, HIGH (Tabla << 1)
+    RET
+
+
+Tabla:
+.DB 0x7D, 0x11, 0xBC, 0xB5, 0xD1, 0xE5, 0xED, 0x31, 0xFD, 0xF1
