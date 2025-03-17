@@ -1,0 +1,218 @@
+.INCLUDE "M328PDEF.INC"  ; Incluir la librería con nombres
+
+
+.DSEG
+ContadorTimer1: .BYTE 1    ; Contador para Timer0 (ticks de ~10ms)
+Segundos:       .BYTE 1    ; Segundos (0-59)
+Minutos:        .BYTE 1    ; Minutos (0-59)
+Horas:          .BYTE 1    ; Horas (0-23)
+HORA_TENS:      .BYTE 1    ; Dígito decenas de hora
+HORA_UNITS:     .BYTE 1    ; Dígito unidades de hora
+MIN_TENS:       .BYTE 1    ; Dígito decenas de minutos
+MIN_UNITS:      .BYTE 1    ; Dígito unidades de minutos
+
+
+.CSEG
+.ORG 0x0000                ; Dirección de inicio del programa
+RJMP EmpezarCodigo
+
+.ORG 0x0020
+RJMP TIMER0
+
+.ORG 0x0030
+RETI
+
+EmpezarCodigo:
+    ; Configuración del Stack Pointer
+    LDI R16, LOW(RAMEND)
+    OUT SPL, R16
+    LDI R16, HIGH(RAMEND)
+    OUT SPH, R16
+
+Setup:
+    ; Configurar reloj y prescaler
+    LDI R16, 0b10000000    ; Activar el prescaler
+    STS CLKPR, R16
+    LDI R16, 0b00000001    ; 8MHz
+    STS CLKPR, R16
+
+    LDI R16, 0x00          ; Desactivar LED de TX/RX
+    STS UCSR0B, R16
+
+    ; Configurar Timer0
+    LDI R16, 0b00000001
+    STS TIMSK0, R16
+
+    CLR R16
+    LDI R16, (1 << CS02) | (1 << CS00)  ; Prescaler a 1024
+    OUT TCCR0B, R16
+
+    LDI R16, 178           ; Precargar TCNT0 para ~10ms de intervalo
+    OUT TCNT0, R16
+
+    ; Configuración de puertos para los displays
+    ; Transistores en PORTB
+    LDI R16, 0b00001111
+    OUT DDRB, R16
+
+    ; Configurar PORTD para los segmentos (todos los pines como salida)
+    LDI R16, 0b11111111
+    OUT DDRD, R16
+
+    SEI                   ; Habilita las interrupciones globales
+
+;------------------------------------------------------------------
+Loop:
+;------------------------------------------------------------------
+    RCALL ConvertTime     ; Actualiza los dígitos a mostrar a partir de Horas y Minutos
+
+    
+    ; Display 1
+    LDI R16, 0x01       ; Activa transistor del display 1 
+    OUT PORTB, R16
+    LDS R16, HORA_TENS  
+    RCALL DisplayDigit  
+    RCALL Delay
+
+    ; Display 2
+    LDI R16, 0x02       ; Activa transistor del display 2
+    OUT PORTB, R16
+    LDS R16, HORA_UNITS
+    RCALL DisplayDigit
+    RCALL Delay
+
+    ; Display 3
+    LDI R16, 0x04       ; Activa transistor del display 3 
+    OUT PORTB, R16
+    LDS R16, MIN_TENS
+    RCALL DisplayDigit
+    RCALL Delay
+
+    ; Display 4
+    LDI R16, 0x08       ; Activa transistor del display 4 
+    OUT PORTB, R16
+    LDS R16, MIN_UNITS
+    RCALL DisplayDigit
+    RCALL Delay
+
+    RJMP Loop
+
+TIMER0:
+    PUSH R16
+
+    LDS  R16, ContadorTimer1
+    INC  R16
+    STS  ContadorTimer1, R16
+    CPI  R16, 100             ; 100 ticks = 1 segundo
+    BRNE FinTimer0
+
+    CLR  R16
+    STS  ContadorTimer1, R16
+
+    ; Incrementar Segundos
+    LDS  R16, Segundos
+    INC  R16
+    STS  Segundos, R16
+
+    LDS  R16, Segundos
+    CPI  R16, 60
+    BRNE FinTimer0
+
+    CLR  R16
+    STS  Segundos, R16
+
+    ; Incrementar Minutos
+    LDS  R16, Minutos         
+    INC  R16
+    STS  Minutos, R16
+
+    LDS  R16, Minutos
+    CPI  R16, 60
+    BRNE FinTimer0
+
+    CLR  R16
+    STS  Minutos, R16
+
+    ; Incrementar Horas
+    LDS  R16, Horas           
+    INC  R16
+    STS  Horas, R16
+
+    LDS  R16, Horas
+    CPI  R16, 24
+    BRNE FinTimer0
+
+    CLR  R16
+    STS  Horas, R16          
+
+FinTimer0:
+    
+    LDI  R16, 178
+    OUT  TCNT0, R16
+
+	POP  R16
+    RETI
+
+Delay:
+    LDI R20, 255
+    LDI R21, 50
+DelayLoop:
+    DEC R20
+    BRNE DelayLoop
+    LDI R20, 255
+    DEC R21
+    BRNE DelayLoop
+    RET
+
+PonerTabla:
+    LDI ZL, LOW (Tabla << 1)
+    LDI ZH, HIGH (Tabla << 1)
+    RET
+
+ConvertTime:
+    ; Convertir Horas (rango 0-23)
+    LDS R16, Horas       ; R16 = Horas
+    LDI R17, 0           ; R17 = contador de decenas
+HoursLoop:
+    CPI R16, 10
+    BRLO SaveHours
+    SUBI R16, 10
+    INC R17
+    RJMP HoursLoop
+SaveHours:
+    STS HORA_TENS, R17   ; Guardar decenas de hora
+    STS HORA_UNITS, R16  ; Guardar unidades de hora
+
+    ; Convertir Minutos (rango 0-59)
+    LDS R16, Minutos     ; R16 = Minutos
+    LDI R17, 0           ; R17 = contador de decenas
+MinutesLoop:
+    CPI R16, 10
+    BRLO SaveMinutes
+    SUBI R16, 10
+    INC R17
+    RJMP MinutesLoop
+SaveMinutes:
+    STS MIN_TENS, R17    ; Guardar decenas de minutos
+    STS MIN_UNITS, R16   ; Guardar unidades de minutos
+    RET
+
+DisplayDigit:
+    RCALL PonerTabla     
+    MOV R18, R16         ; R18 = dígito
+DisplayDigitLoop:
+    CPI R18, 0           ; Si R18 es 0, ya estamos en la posición deseada
+    BRNE IncZ
+    RJMP GetPattern
+IncZ:
+    INC R30              ; Incrementar puntero Z (tabla de 10 bytes)
+    DEC R18
+    RJMP DisplayDigitLoop
+GetPattern:
+    LPM R16, Z           ; Obtener el patrón del dígito desde la Tabla
+    OUT PORTD, R16       ; Mostrar en PORTD
+    RET
+
+.CSEG
+Tabla:
+    .DB 0x7D, 0x11, 0xBC, 0xB5, 0xD1, 0xE5, 0xED, 0x31, 0xFD, 0xF1
