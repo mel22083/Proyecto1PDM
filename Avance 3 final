@@ -1,0 +1,479 @@
+.INCLUDE "M328PDEF.INC"  ; Incluir la librería con definiciones del ATmega328P
+
+;------------------------------------------------------------------
+; Variables en RAM 
+;------------------------------------------------------------------
+
+.DSEG
+ContadorTimer1: .BYTE 1       ; Contador para Timer0 (ticks de ~10ms)
+Segundos:       .BYTE 1       ; Segundos (0-59)
+Minutos:        .BYTE 1       ; Minutos (0-59)
+Horas:          .BYTE 1       ; Horas (0-23)
+HORA_TENS:      .BYTE 1       ; Dígito decenas de hora
+HORA_UNITS:     .BYTE 1       ; Dígito unidades de hora
+MIN_TENS:       .BYTE 1       ; Dígito decenas de minutos
+MIN_UNITS:      .BYTE 1       ; Dígito unidades de minutos
+
+Parpadeo_Leds:  .BYTE 1       ; Para parpadeo de los leds
+
+; Variables para Fecha
+Dia:            .BYTE 1       ; Día (1-31)
+Mes:            .BYTE 1       ; Mes (1-12)
+DIA_TENS:       .BYTE 1       ; Dígito decenas de día
+DIA_UNITS:      .BYTE 1       ; Dígito unidades de día
+MES_TENS:       .BYTE 1       ; Dígito decenas de mes
+MES_UNITS:      .BYTE 1       ; Dígito unidades de mes
+
+
+Modo:           .BYTE 1		  ; Variable de Modo: 0 = modo hora, 1 = modo fecha
+
+
+.CSEG
+.ORG 0x0000                ; Dirección de inicio del programa
+RJMP EmpezarCodigo
+
+; Vector de interrupción para Timer0 Overflow (~10ms)
+.ORG 0x0020
+RJMP TIMER0
+
+; Vector para interrupción de botones 
+.ORG 0x0030
+RETI
+
+;------------------------------------------------------------------
+EmpezarCodigo:
+;------------------------------------------------------------------
+
+    ; Configuración del Stack Pointer
+    LDI   R16, LOW(RAMEND)
+    OUT   SPL, R16
+    LDI   R16, HIGH(RAMEND)
+    OUT   SPH, R16
+
+Setup:
+    ; Inicializar variables de control
+    CLR   R16
+    STS   Parpadeo_Leds, R16    ; Parpadeo_Leds inicia en 0
+    STS   Modo, R16             ; Inicia en modo hora (0)
+
+    ; Inicializar fecha, por ejemplo: Día = 1, Mes = 1
+    LDI   R16, 1
+    STS   Dia, R16
+    STS   Mes, R16
+
+    ; Configura el reloj y el prescaler
+    LDI   R16, 0b10000000      ; Activamos el prescaler
+    STS   CLKPR, R16
+    LDI   R16, 0b00000001      ; 8MHz
+    STS   CLKPR, R16
+
+    LDI   R16, 0x00            ; Desactiva LED de TX/RX
+    STS   UCSR0B, R16
+
+    ; Configurar Timer0
+    LDI   R16, 0b00000001
+    STS   TIMSK0, R16
+
+    CLR   R16
+    LDI   R16, (1 << CS02) | (1 << CS00)  ; Prescaler a 1024
+    OUT   TCCR0B, R16
+
+    LDI   R16, 178             ; Precargar TCNT0 para ~10ms de intervalo
+    OUT   TCNT0, R16
+
+    ; Configurar puertos para los displays (PORTB y PORTD)
+    LDI   R16, 0b00111111      ; PORTB: pines PB0 a PB3 como salidas
+    OUT   DDRB, R16
+
+    LDI   R16, 0b11111111      ; PORTD: todos los pines como salidas
+    OUT   DDRD, R16
+
+    ; Configurar PORTC:
+    ; Botones en PC0, PC1, PC2 (entradas con pull-up)
+    ; LED parpadeo en PC6 y PC7 (salidas)
+    ; DDRC: PC6,PC7 como salidas
+	; PC0,PC1,PC2 como entradas
+
+    LDI   R16, 0b00110000
+    OUT   DDRC, R16
+    ; Habilitar pull-ups en PC0-2:
+    LDI   R16, 0b00000111
+    OUT   PORTC, R16   ; Nota: esto afecta solo a pines configurados como entrada
+
+    SEI                ; Habilitar interrupciones globales
+
+MainLoop:
+    ; Poll del botón A0 (PC0) para cambiar de modo
+    IN    R16, PINC
+    ANDI  R16, 0x01           ; Extrae bit0 (A0)
+    CPI   R16, 0              ; Botón presionado (activo bajo)
+    BRNE  CheckModeEnd       ; Si no está presionado, salta
+ToggleMode:
+    LDS   R16, Modo
+    LDI   R17, 0x01
+    EOR   R16, R17
+    STS   Modo, R16
+    RCALL Delay              ; Delay
+    
+WaitRelease:				 ; Espera a que se suelte el botón
+    IN    R16, PINC
+    ANDI  R16, 0x01
+    CPI   R16, 0x01          ; Cuando se suelte, PINC bit0 será 1
+    BRNE  WaitRelease
+
+CheckModeEnd:
+    LDS   R16, Modo
+    CPI   R16, 0
+    BRNE  DateMode           ; Si Modo = 0, es fecha
+    RCALL ConvertTime        ; Modo hora
+    RJMP  DisplayModeDone
+
+DateMode:
+    RCALL ConvertDate        ; Modo fecha
+DisplayModeDone:
+
+//LEDS ESTADO MULTIPLEXEO 
+	LDS   R16, Modo
+    CPI   R16, 0
+	BREQ  LedsModo0
+	CPI   R16, 1
+	BREQ  LedsModo1
+
+	LedsModo0:				; Si se enciende significa que estamos en el modo fecha
+	LDI   R16, 0x20
+    OUT   PORTB, R16
+	LDI	  R16, 0x20
+	OUT	  PORTD, R16
+	RCALL Delay
+	RJMP MultiplexLedsTerminado
+
+	LedsModo1:				; Si se enciende significa que estamos en el modo hora
+	LDI   R16, 0x20
+    OUT   PORTB, R16
+	LDI	  R16, 0x40
+	OUT	  PORTD, R16
+	RCALL Delay
+	RJMP MultiplexLedsTerminado
+
+    ; Multiplexado de displays
+    ; En modo hora se utilizan HORA_TENS, HORA_UNITS, MIN_TENS, MIN_UNITS
+    ; En modo fecha se utilizan DIA_TENS, DIA_UNITS, MES_TENS, MES_UNITS
+    
+	MultiplexLedsTerminado:
+	LDS   R16, Modo
+    CPI   R16, 0
+    BRNE  DisplayDateMode    ; Si Modo = 0, usar modo fecha
+    ; Modo hora:
+    ; Display 1: decenas de hora
+    LDI   R16, 0x01
+    OUT   PORTB, R16
+    LDS   R16, HORA_TENS
+    RCALL DisplayDigit
+    RCALL Delay
+    ; Display 2: unidades de hora
+    LDI   R16, 0x02
+    OUT   PORTB, R16
+    LDS   R16, HORA_UNITS
+    RCALL DisplayDigit
+    RCALL Delay
+    ; Display 3: decenas de minutos
+    LDI   R16, 0x04
+    OUT   PORTB, R16
+    LDS   R16, MIN_TENS
+    RCALL DisplayDigit
+    RCALL Delay
+    ; Display 4: unidades de minutos
+    LDI   R16, 0x08
+    OUT   PORTB, R16
+    LDS   R16, MIN_UNITS
+    RCALL DisplayDigit
+    RCALL Delay
+    RJMP  MainLoop
+
+DisplayDateMode:
+    ; Modo fecha: se muestran día y mes
+    ; Display 1: decenas de día
+    LDI   R16, 0x01
+    OUT   PORTB, R16
+    LDS   R16, DIA_TENS
+    RCALL DisplayDigit
+    RCALL Delay
+    ; Display 2: unidades de día
+    LDI   R16, 0x02
+    OUT   PORTB, R16
+    LDS   R16, DIA_UNITS
+    RCALL DisplayDigit
+    RCALL Delay
+    ; Display 3: decenas de mes
+    LDI   R16, 0x04
+    OUT   PORTB, R16
+    LDS   R16, MES_TENS
+    RCALL DisplayDigit
+    RCALL Delay
+    ; Display 4: unidades de mes
+    LDI   R16, 0x08
+    OUT   PORTB, R16
+    LDS   R16, MES_UNITS
+    RCALL DisplayDigit
+    RCALL Delay
+    RJMP  MainLoop
+
+;--------------------------------------------------------------------------------
+; TIMER0: Rutina de interrupción (cada ~10ms)
+; Actualiza el tiempo y al llegar a 24h llama a UpdateDate para cambiar la fecha
+; También se ejecuta el parpadeo de LEDs (en PORTC, pines A6 y A7)
+;--------------------------------------------------------------------------------
+TIMER0:
+    PUSH  R16
+    PUSH  R17
+
+    LDS   R16, ContadorTimer1
+    INC   R16
+    STS   ContadorTimer1, R16
+
+    CPI   R16, 50             ; 50 ticks ~500ms
+    BREQ  ParpadeoLedRoutine
+
+SiguiendoTimer0:
+    LDS   R16, ContadorTimer1
+    CPI   R16, 100            ; 100 ticks = 1 segundo
+    BRNE  FinTimer0
+
+    CLR   R16
+    STS   ContadorTimer1, R16
+
+    ; Actualizar tiempo:
+    LDS   R16, Segundos
+    INC   R16
+    STS   Segundos, R16
+
+    LDS   R16, Segundos
+    CPI   R16, 60
+    BRNE  FinTimer0
+    CLR   R16
+    STS   Segundos, R16		  ; Reiniciar a 0 al llegar a 60
+
+    LDS   R16, Minutos
+    INC   R16
+    STS   Minutos, R16
+
+    LDS   R16, Minutos
+    CPI   R16, 60
+    BRNE  FinTimer0
+    CLR   R16
+    STS   Minutos, R16		  ; Reiniciar a 0 al llegar a 60
+
+    LDS   R16, Horas
+    INC   R16
+    STS   Horas, R16		
+
+    LDS   R16, Horas
+    CPI   R16, 24
+    BRNE  FinTimer0
+    CLR   R16
+    STS   Horas, R16           ; Reiniciar a 0 al llegar a 24
+
+    ; Al reiniciar el reloj, actualizar la fecha
+    RCALL UpdateDate
+
+FinTimer0:
+    POP   R17
+    POP   R16
+    LDI   R16, 178
+    OUT   TCNT0, R16
+    RETI
+
+;---------------------------------------------------------------------------------------
+; ParpadeoLedRoutine: Alterna Parpadeo_Leds y controla los LEDS en PORTC (pines A6 y A7)
+;----------------------------------------------------------------------------------------
+
+ParpadeoLedRoutine:
+    LDS   R16, Parpadeo_Leds
+    LDI   R17, 0x01
+    EOR   R16, R17
+    STS   Parpadeo_Leds, R16
+
+    CPI   R16, 0x01
+    BRNE  DosLedsApagar
+    ; Encender LEDs: asumiendo LEDs activos altos en PC6 y PC7
+    IN    R16, PORTC
+    LDI   R17, 0x30          ; 0b00110000: pone A7 y A6 en 1
+    OR    R16, R17
+    OUT   PORTC, R16
+    RJMP  SiguiendoTimer0
+
+DosLedsApagar:
+    IN    R16, PORTC
+    LDI   R17, 0xCF          ; 0b11001111: fuerza A7 y A6 a 0 (si activos altos)
+    AND   R16, R17
+    OUT   PORTC, R16
+    RJMP  SiguiendoTimer0
+
+;---------------------------------------------------------------------------------------------
+; UpdateDate: Actualiza la fecha al llegar a 24 hotas y cambia de día o de mes si es necesario
+; Se utiliza una lógica simple separada en 3 opciones:
+;   - Febrero: 28 días
+;   - Abril, Junio, Septiembre y Noviembre: 30 días
+;   - Los demás: 31 días
+;----------------------------------------------------------------------------------------------
+UpdateDate:
+    LDS   R16, Dia         ; R16 = día actual
+    LDS   R17, Mes         ; R17 = mes actual
+    ; Determinar máximo de días según el mes:
+    CPI   R17, 2
+    BREQ  SetMaxFeb
+    CPI   R17, 4
+    BRNE  CheckMes6
+    RJMP  SetMax30
+CheckMes6:
+    CPI   R17, 6
+    BRNE  CheckMes9
+    RJMP  SetMax30
+CheckMes9:
+    CPI   R17, 9
+    BRNE  CheckMes11
+    RJMP  SetMax30
+CheckMes11:
+    CPI   R17, 11
+    BRNE  SetMax31
+    RJMP  SetMax30
+
+SetMaxFeb:
+    LDI   R18, 28
+    RJMP  CompareDay
+SetMax30:
+    LDI   R18, 30
+    RJMP  CompareDay
+SetMax31:
+    LDI   R18, 31
+
+CompareDay:
+    CP   R16, R18
+    BRLO  NoWrapDate       ; Si día < máximo, no se envuelve
+    ; Si día >= máximo, reinicia día y actualiza mes:
+    CLR   R16
+    INC   R16              ; Día = 1
+    STS   Dia, R16
+    LDS   R16, Mes
+    INC   R16
+    CPI   R16, 13
+    BRLO  StoreNewMes
+    CLR   R16              ; Si mes > 12, reinicia a 1
+    INC   R16
+StoreNewMes:
+    STS   Mes, R16
+    RJMP  EndUpdateDate
+
+NoWrapDate:
+    INC   R16
+    STS   Dia, R16
+
+EndUpdateDate:
+    RET
+
+;------------------------------------------------------------------
+; ConvertTime: Convierte Horas y Minutos a dígitos individuales
+; Los dígitos se almacenan en HORA_TENS, HORA_UNITS, MIN_TENS, MIN_UNITS
+;------------------------------------------------------------------
+ConvertTime:
+    LDS   R16, Horas       ; R16 = Horas
+    LDI   R17, 0           ; R17 = contador de decenas
+HoursLoop:
+    CPI   R16, 10
+    BRLO  SaveHours
+    SUBI  R16, 10
+    INC   R17
+    RJMP  HoursLoop
+SaveHours:
+    STS   HORA_TENS, R17
+    STS   HORA_UNITS, R16
+
+    LDS   R16, Minutos     ; R16 = Minutos
+    LDI   R17, 0
+MinutesLoop:
+    CPI   R16, 10
+    BRLO  SaveMinutes
+    SUBI  R16, 10
+    INC   R17
+    RJMP  MinutesLoop
+SaveMinutes:
+    STS   MIN_TENS, R17
+    STS   MIN_UNITS, R16
+    RET
+
+;------------------------------------------------------------------
+; ConvertDate: Convierte Dia y Mes a dígitos individuales
+; Los dígitos se almacenan en DIA_TENS, DIA_UNITS, MES_TENS, MES_UNITS
+;------------------------------------------------------------------
+ConvertDate:
+    LDS   R16, Dia
+    LDI   R17, 0
+DateLoop:
+    CPI   R16, 10
+    BRLO  SaveDate
+    SUBI  R16, 10
+    INC   R17
+    RJMP  DateLoop
+SaveDate:
+    STS   DIA_TENS, R17
+    STS   DIA_UNITS, R16
+
+    LDS   R16, Mes
+    LDI   R17, 0
+MonthLoop:
+    CPI   R16, 10
+    BRLO  SaveMonth
+    SUBI  R16, 10
+    INC   R17
+    RJMP  MonthLoop
+SaveMonth:
+    STS   MES_TENS, R17
+    STS   MES_UNITS, R16
+    RET
+
+;------------------------------------------------------------------
+; DisplayDigit: Muestra en PORTD el patrón correspondiente al dígito
+; Entrada: R16 contiene el dígito (0-9)
+;------------------------------------------------------------------
+
+DisplayDigit:
+    RCALL PonerTabla       ; Cargar la dirección base de la Tabla en Z
+    MOV   R18, R16         ; R18 = dígito a desplazar
+DisplayDigitLoop:
+    CPI   R18, 0
+    BRNE  IncZ
+    RJMP  GetPattern
+IncZ:
+    INC   R30              ; Avanza en la tabla
+    DEC   R18
+    RJMP  DisplayDigitLoop
+GetPattern:
+    LPM   R16, Z           ; Cargar el patrón del dígito
+    OUT   PORTD, R16
+    RET
+
+;------------------------------------------------------------------
+; PonerTabla: Carga la dirección base de la Tabla en el registro Z
+;------------------------------------------------------------------
+
+PonerTabla:
+    LDI   ZL, LOW (Tabla << 1)
+    LDI   ZH, HIGH (Tabla << 1)
+    RET
+;------------------------------------------------------------------
+; Delay: Para el Multiplexado
+;------------------------------------------------------------------
+Delay:
+    LDI   R20, 255
+    LDI   R21, 50
+DelayLoop:
+    DEC   R20
+    BRNE  DelayLoop
+    LDI   R20, 255
+    DEC   R21
+    BRNE  DelayLoop
+    RET
+
+.CSEG
+Tabla:
+    .DB 0x7D, 0x11, 0xBC, 0xB5, 0xD1, 0xE5, 0xED, 0x31, 0xFD, 0xF1
