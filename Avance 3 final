@@ -71,7 +71,7 @@ Setup:
     STS   UCSR0B, R16
 
     ; Configurar Timer0
-    LDI   R16, 0b00000001
+    LDI   R16, 0b00000001		;Activa la interrupción del Timer0
     STS   TIMSK0, R16
 
     CLR   R16
@@ -82,7 +82,7 @@ Setup:
     OUT   TCNT0, R16
 
     ; Configurar puertos para los displays (PORTB y PORTD)
-    LDI   R16, 0b00111111      ; PORTB: pines PB0 a PB3 como salidas
+    LDI   R16, 0b00111111      ; PORTB: pines PB0 a PB5 como salidas
     OUT   DDRB, R16
 
     LDI   R16, 0b11111111      ; PORTD: todos los pines como salidas
@@ -297,14 +297,14 @@ ParpadeoLedRoutine:
     BRNE  DosLedsApagar
     ; Encender LEDs: asumiendo LEDs activos altos en PC6 y PC7
     IN    R16, PORTC
-    LDI   R17, 0x30          ; 0b00110000: pone A7 y A6 en 1
+    LDI   R17, 0x30          ; 0b00110000: pone A5 y A4 en 1
     OR    R16, R17
     OUT   PORTC, R16
     RJMP  SiguiendoTimer0
 
 DosLedsApagar:
     IN    R16, PORTC
-    LDI   R17, 0xCF          ; 0b11001111: fuerza A7 y A6 a 0 (si activos altos)
+    LDI   R17, 0xCF          ; 0b11001111: pone A5 y A4 en 0
     AND   R16, R17
     OUT   PORTC, R16
     RJMP  SiguiendoTimer0
@@ -379,11 +379,11 @@ ConvertTime:
     LDS   R16, Horas       ; R16 = Horas
     LDI   R17, 0           ; R17 = contador de decenas
 HoursLoop:
-    CPI   R16, 10
-    BRLO  SaveHours
-    SUBI  R16, 10
-    INC   R17
-    RJMP  HoursLoop
+    CPI   R16, 10		   ; Comparar si es mayor a 10
+    BRLO  SaveHours		   ; Si es mayor se resta 10
+    SUBI  R16, 10		   ; Resta 10
+    INC   R17			   ; Incrementa 1 hasta que sea 10
+    RJMP  HoursLoop		   ; Repite el ciclo
 SaveHours:
     STS   HORA_TENS, R17
     STS   HORA_UNITS, R16
